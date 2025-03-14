@@ -1,0 +1,1553 @@
+---
+title: "R Code for Survey Data"
+author: "Rough Commons"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    highlight: kate
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    thumbnails: false
+    self_contained: TRUE
+---
+
+```{r setup, include=FALSE}
+## Global options
+knitr::opts_chunk$set(cache = TRUE)
+```
+```{css, echo=FALSE}
+h2 {
+padding: 0.25em 0.5em;
+border-left: solid 7px #ccc;
+}
+```
+```{r echo=FALSE, out.width = "25%", fig.align = "left", fig.alt="Rough Commons"}
+## logo
+knitr::include_graphics("https://roug.jp/wp-content/uploads/2020/06/logo_square.png")
+```
+
+# Link
+
+[=> Data Visualization](https://roug.jp/rcode/DataVisualization.html)
+
+# Basic Settings and Command
+
+## Settings {.tabset}
+
+### Libraries
+
+```{r , include=TRUE, warning=FALSE, message=FALSE}
+#基本ライブラリ
+library(MASS)
+library(tidyverse)
+library(ggrepel)
+library(ggthemes)
+library(psych)
+library(gridExtra)
+library(janitor)
+library(extrafont)
+library(knitr)
+library(kableExtra)
+library(DT)
+```
+
+### Japanese Fonts
+
+```{r , include=TRUE}
+#library(extrafont)
+# font_import() #最初だけ
+# loadfonts() # font_import() で作ったフォント一覧を出力デバイスに登録する。
+
+# head(names(windowsFonts())) #windows
+# windowsFonts("MEI"=windowsFont("Meiryo")) #windows 
+#par(family= "HiraKakuProN-W3") #mac
+#library(showtext) #mac
+```
+
+## Basic Commands
+
+```{r , include=TRUE}
+ls() #file list
+rm(list=ls()) #all file remove
+search() #attached file
+```
+
+## Generate Data {.tabset}
+
+### Distribution
+
+```{r , include=TRUE}
+## 正規分布するデータ
+test.data<-NULL
+set.seed(12345)
+test.data$NORM<-rnorm(n=1000,mean=2,sd=1.414)
+test.data<-data.frame(test.data)
+
+## ポアソン分布
+test.data$POISSON<-rpois(n=1000,lambda=2)
+
+## negative binominal
+test.data$NB<-rnbinom(n=1000,size=1,mu=2)
+describe(test.data)|>select(vars:median)|>kable(digits=3)
+
+test.long<-test.data|>pivot_longer(cols=NORM:NB,names_to="distribution",values_to="value")
+test.long$distribution<-factor(test.long$distribution,levels=c("NORM","POISSON","NB"))
+test.long|>ggplot(aes(x=value,fill=distribution))+geom_histogram(binwidth=1,color="white")+facet_grid(distribution~.)
+```
+
+### Multivariate Normal Distribution
+
+```{r , include=TRUE}
+## 多変量正規分布
+mu<-c(0,0)
+sigma<-matrix(c(1,0.7,0.7,1),nrow=2,ncol=2) #分散共分散行列
+set.seed(12345)
+mv.data<-MASS::mvrnorm(n=1000,mu=mu,Sigma=sigma)
+mv.data<-as.data.frame(mv.data)
+colnames(mv.data)<-c("var1","var2")
+DT::datatable(mv.data)|>formatRound(1:2,digits=3)
+```
+```{r plot , include=TRUE}
+library(ggExtra)
+p <- ggplot(mv.data, aes(x=var1, y=var2))+
+          geom_vline(xintercept=0)+geom_hline(yintercept=0)+
+          geom_point(color="dodgerblue")+theme(legend.position="none")+
+          geom_smooth(method="lm",na.rm=TRUE) +
+          labs(title="r=0.7")
+ggExtra::ggMarginal(p, type="histogram",fill="dodgerblue",color="white")
+```
+
+### Cumulative
+
+Empirical Cumulative Distribution 累積分布
+
+```{r, include=TRUE}
+plot(ecdf(test.data$NORM))
+```
+
+## Tips
+
+- remove error message "Error in exists(cacheKey, where = .rs.WorkingDataEnv, inherits = FALSE) : invalid first argument"
+
+```{r , include=TRUE}
+# Session -> Restart R
+```
+
+# Preprocessing
+
+## Import Data {.tabset}
+
+### Rawdata
+
+```{r , include=TRUE, warning=FALSE, message=FALSE}
+# ディレクトリ
+# setwd("C:/Users/miyas/Dropbox/rough_commons/script/") #pc
+# setwd("/Users/kimikazumiyashita/Library/CloudStorage/Dropbox/rough_commons/script/rcode/") #mac
+
+# csv読み込み
+test.df<-read_csv("testdata.csv")
+#クリップボードから
+#df<-read.delim("clipboard") #windows
+#df<-read.delim(pipe("pbpaste")) #mac
+
+#サンプリング
+sample.df<-test.df[sample(nrow(test.df),size=1000,replace=F),]
+kable(head(sample.df))
+```
+
+### json
+
+```{r , include=TRUE}
+library(jsonlite)
+svy<-read_json("test.json")
+
+make_format<-function(svy){
+  format<-tibble(svy)
+  q.format<-format|>unnest_longer(svy)|>unnest_wider(svy)
+  q.format<-q.format|>select(svy_id,qtype,qlabel)
+
+  i.format<-format|>unnest_longer(svy)|>unnest_longer(svy,names_repair="unique")|>unnest_wider(svy,names_sep="_")
+  i.format<-i.format|>select(svy_id...2,svy_itype:svy_choice)|>drop_na(svy_itype)
+  i.format<-i.format |> rename_with(\(x) str_remove(x, "svy_"),starts_with("svy_"))|>rename(id=id...2)
+  c.format<-i.format|>unnest_longer(choice)
+
+  format.lst<-list(q=q.format,i=i.format,c=c.format)
+  return(format.lst)
+}
+
+test.format<-make_format(svy)
+datatable(test.format$q) #質問レベルフォーマット
+datatable(test.format$i) #アイテムレベルのフォーマット
+datatable(test.format$c) #選択肢レベルのフォーマット
+q.format<-test.format$q
+i.format<-test.format$i
+c.format<-test.format$c
+
+```
+
+### Factor Variables
+
+```{r , include=TRUE}
+# カテゴリ変数の選択肢をコード→ラベル化
+make_fct<-function(df,format){
+ fct.df<-df
+ fct_var<-format$i$id[format$i$itype=="SA"]
+ for(i in 1:length(fct_var)){
+   varname <- fct_var[i]
+   choice<-as.vector(format$c$choice[format$c$id==varname])
+   fct.df[[varname]]<- factor(fct.df[[varname]], levels = seq(length(choice)), labels = choice)
+ }
+ return(fct.df)
+}
+
+test.df<-make_fct(test.df,test.format)
+test.df|>select(Q1_1)|>summary()|>kable()
+```
+
+### Save
+
+```{r , include=TRUE}
+save(test.df,file="testdata.RData")
+#load("testdata.RData") #データのload
+#head(test.df) #df名は元のまま
+```
+
+## Inspection {.tabset}
+
+### Outline
+
+#### データ数
+
+```{r , include=TRUE}
+# 行数、列数、データ
+# glimpse(test.df))
+dim(test.df)
+```
+
+#### 基本統計量
+
+```{r , include=TRUE}
+#概要
+# summary(test.df)
+test.df|>describe()|>select(vars:median,min,max,se)|>DT::datatable()|>formatRound(3:8,digits=3)
+```
+
+### Cleaning
+
+#### 重複チェック
+
+```{r , include=TRUE}
+test.df|>janitor::get_dupes(MID)
+
+#全変数重複データを確認
+# janitor::get_dupes(test.df)
+```
+
+#### 変数名
+
+```{r , include=TRUE}
+#変数名をスネークケースに統一
+# test.df<-janitor::clean_names(test.df)
+
+```
+
+## Data Processing
+
+### 加工前データ {.tabset}
+
+
+```{r , include=TRUE}
+df<-test.df #テストデータ：分析用データdfに格納
+df|>select(MID:Q1c6)|>DT::datatable()
+
+k04.df<-read_csv("kakegawa04.csv") #掛川市データ k04
+svy<-jsonlite::read_json("kakegawa04.json")
+k04.format<-make_format(svy)
+k04.df<-make_fct(k04.df,k04.format)
+k04.df|>select(RID:Q05)|>DT::datatable()
+```
+
+### 加工処理 {.tabset}
+
+#### 値の置換
+
+```{r , include=TRUE}
+#NA変換
+k04.df$Q06[k04.df$Q06==0]<-NA #世帯人数0人
+k04.df$Q06|>describe()|>select(vars:median,min,max,se)|>kable(digits=3)
+```
+
+#### 数量⇒カテゴリー
+
+```{r , include=TRUE}
+#数量のカテゴライズ
+df<-df|> mutate(ageclass = ifelse(FS2t1 <35,'34歳以下',ifelse(FS2t1 <50, '35～49歳','50歳以上')))
+#factor 順序
+df<-df|> mutate(ageclass = fct_relevel(ageclass, '34歳以下','35～49歳','50歳以上'))
+
+#bin分割
+df$age10<-cut(df$FS2t1,breaks=seq(10,70,10),right=FALSE)  
+#factor ラベルの変更
+df$age10<-df$age10|>fct_recode("15～19歳"="[10,20)","20～29歳"="[20,30)","30～39歳"="[30,40)","40～49歳"="[40,50)","50～59歳"="[50,60)","60～69歳"="[60,70)")
+df|>tabyl(age10)|>adorn_totals(where="row")|>adorn_pct_formatting(affix_sign=FALSE)|>kable(digits=3)
+
+##case_when
+hist(k04.df$Q06)
+#df<-df %>% mutate(BD5 = case_when(
+#outcome_ind== '前年と比較して売上が上がった' ~ '売上上昇' ,
+#outcome_ind== '売上は前年と同様である' ~ '前年同様' ,
+#outcome_ind== '前年と比較して売上が下がった' ~ '売上低下' ,
+#.default = '目標数字なし／その他／不明'))
+#df<-df%>% mutate(BD5 = fct_relevel(BD5, '売上上昇','前年同様','売上低下','目標数字なし／その他／不明'))
+
+```
+
+#### ラベルと順序
+
+```{r , include=TRUE}
+#factor コード→ラベル
+#motiv<-motiv%>%mutate(mcluster = factor(cluster, levels = c(1,2,3,4), labels = c("Biz_Success", "Conservative","Lost", "Self_Growth")))
+```
+
+#### カテゴリーの併合
+
+```{r , include=TRUE}
+#カテゴリーの併合
+##ifelse
+#df<-df|> mutate(BD2 = ifelse(experience =='5-10年','5-10年',ifelse(experience =='10年以上', '10年以上','5年未満')))
+#df<-df|> mutate(BD2 = fct_relevel(BD2, '5年未満','5-10年','10年以上'))
+
+
+#ダミー変数化
+#df<-df %>% mutate(dpt2 = case_when(
+#outcome_dpt== '上がっている' ~ 1,
+#.default = 0))
+```
+
+#### 多項目尺度
+```{r , include=TRUE}
+
+#複数項目の平均を変数化
+#df$manner_ave<-df%>%select(c(action07,action08,action09,action10))%>%apply(1,mean,na.rm=TRUE)
+
+```
+
+
+#### カテゴリー⇒数量
+
+```{r , include=TRUE}
+#カテゴリ変数のスコア化
+SC4.df<-select(df,SC4s1:SC4s11)
+SC4.score<-SC4.df|>mutate_if(is.factor, as.numeric) #factorを数値に変換
+SC4.score<-7-SC4.score #max+1から引いて逆転項目スコア化
+temp.name<-paste("SC4s",seq(1:11),"_score",sep="")
+colnames(SC4.score)<-temp.name
+SC4.score|>describe()|>select(vars:sd)|>kable(digits=3)
+df<-cbind(df,SC4.score)
+```
+
+### Scaling
+
+```{r , include=TRUE}
+test.data$CenteredNB<-scale(test.data$NB,scale=FALSE) # 中心化
+test.data$ScaledNB<-scale(test.data$NB) # 標準化
+test.data|>select(NB:ScaledNB)|>describe()|>select(vars:sd)|>kable(digits=3,caption="中心化・標準化")
+```
+
+### LongFormatting
+
+```{r , include=TRUE}
+data(anorexia) #拒食症患者データ
+anorexia.df<-anorexia
+anorexia.df$pid<-rownames(anorexia.df)
+anorexia.df<-anorexia.df|>pivot_longer(cols=c(Prewt,Postwt),names_to="time", values_to="weight")
+anorexia.df$time[anorexia.df$time=='Prewt']<-"Pre"
+anorexia.df$time[anorexia.df$time=='Postwt']<-"Post"
+anorexia.df$time<-factor(anorexia.df$time,levels=c("Pre","Post"))
+head(anorexia.df)|>kable(digits=3)
+```
+
+### Box-Cox
+
+power（べき乗）による正規分布への近似
+
+#### 元データ
+
+```{r , include=TRUE,message=FALSE,warning=FALSE}
+anorexia.df|>ggplot()+geom_histogram(aes(x=weight),color="white",fill="dodgerblue")
+
+qqnorm(anorexia.df$weight) ##QQplotによる正規性の確認
+qqline(anorexia.df$weight)
+
+shapiro.test(anorexia.df$weight) #念のため正規性の検定
+```
+
+#### Box-Cox変換
+
+```{r , include=TRUE,message=FALSE,warning=FALSE}
+anorexia.df$weight_dif<-anorexia.df$weight-69 #変換用に最小値を1にする
+library(car)
+pt<-powerTransform(anorexia.df$weight_dif)
+pt
+
+anorexia.df$BC_weight<-bcPower(anorexia.df$weight_dif,pt$lambda) #box-cox変換
+anorexia.df|>ggplot()+geom_histogram(aes(x=BC_weight),fill="dodgerblue",color="white")
+qqnorm(anorexia.df$BC_weight) ##QQplotによる正規性の確認
+qqline(anorexia.df$BC_weight)
+shapiro.test(anorexia.df$BC_weight) #念のため正規性の検定
+```
+
+#### 対数変換（lambda=0）
+
+```{r , include=TRUE,message=FALSE,warning=FALSE}
+anorexia.df$log_weight<-bcPower(anorexia.df$weight_dif,0) #lambda=0、単に対数変換
+anorexia.df|>ggplot()+geom_histogram(aes(x=log_weight),fill="dodgerblue",color="white")
+qqnorm(anorexia.df$log_weight) ##QQplotによる正規性の確認
+qqline(anorexia.df$log_weight)
+shapiro.test(anorexia.df$log_weight) #念のため正規性の検定
+
+```
+
+## Textmining {.tabset}
+
+### Textmining Japanese 
+
+<span style="color: red;">**TBD**</span>
+
+パッケージや辞書の開発・メンテナンスの安定性を考えると、
+
+- KH Coder
+
+- 見える化エンジン
+
+などの有償サービスを利用したほうがよさそう。
+
+簡便的には、IPA辞書を使いRMeCab::RMeCabFreq や　RMeCab::RMeCabDF　で処理 
+
+#### 現状アクティブなパッケージ・辞書
+
+- gibasa
+
+- JUMAN ++
+
+#### メンテナンスされていないパッケージ・辞書
+
+- rcppmecab
+
+- Neologd
+
+### Scraping SNS data
+
+ソーシャルリスニング SNS Data Collection
+```{r , include=TRUE,message=FALSE,warning=FALSE}
+#twitterでワード検索して、結果をワードクラウドで表現する
+
+#library("twitteR")
+#twitter apiを使うための情報の入力 twitter developersにログインして取得しておく
+consumerKey <- "twitterアカウント情報"
+consumerSecret <- "アカウント情報"
+accessToken <- "アカウント情報"
+accessSecret <- "アカウント情報"
+ 
+#処理の準備
+#httr_oauth_chcheを保存
+#options(httr_oauth_cache = TRUE)
+#認証情報の取得
+#setup_twitter_oauth(consumerKey, consumerSecret, accessToken, accessSecret)
+
+
+library("RMeCab")
+#library("wordcloud")
+ 
+SearchWords <- c("淡麗")
+#TwGetDF <- twListToDF(searchTwitter(searchString = iconv(SearchWords,"CP932","UTF-8"), #検索キーワード
+# n = 1000 #取得するツイート数
+ #since = YYYY-MM-DD #取得する期間
+#)
+ 
+###単語の出現数設定。10以上での抽出結果となります。出現数は適時調整してください。#####
+#WordFreq <- 10
+########
+ 
+###単語解析######
+#res <- docMatrixDF(iconv(TwGetDF[, 1],"UTF-8","CP932"), pos = c("名詞", "形容詞", "動詞"))
+#res <- res[row.names(res)!= "[[LESS-THAN-1]]", ] #[[LESS-THAN-1]]の削除
+#resc <- res[row.names(res)!= "[[TOTAL-TOKENS]]", ]　#[[TOTAL-TOKENS]]の削除
+########
+
+ 
+###単語解析結果をデータフレーム化#####
+#AnalyticsFileDoc <- as.data.frame(apply(resc, 1, sum)) #単語の出現数を集計
+#AnalyticsFileDoc <- subset(AnalyticsFileDoc, AnalyticsFileDoc[, 1] >= WordFreq) #出現数で抽出
+#colnames(AnalyticsFileDoc) <- "出現数" #行名の設定
+########
+
+####csv out####
+#write.csv(AnalyticsFileDoc, file="AnalyticsFileDoc.csv")
+#write(TwGetDF[,1], file="tweets.txt")
+####（ローカルで手作業）
+
+####csv in####
+#AnalyticsFileDoc <- read.csv("AnalyticsFileDoc.csv",row.names=1)
+
+###タグクラウドのテキストの色を設定#####
+#Col <- c("#505457", "#505457", "#505457") #文字色の指定
+
+###タグクラウドのプロット#####
+#wordcloud(row.names(AnalyticsFileDoc), AnalyticsFileDoc[, 1], scale = c(4, .2),
+#          random.order = T, rot.per = .15, colors = Col)
+# plotできないワードが多い場合、scaleを小さくするかword数を検討
+
+###色、サイズ等の検討#####
+#library(RColorBrewer)
+###パレット#####
+#display.brewer.all()
+#col<- brewer.pal(12,"Paired")
+###Pairedパレットを使って、上位200単語まで、サイズは1～4#####
+#wordcloud(row.names(AnalyticsFileDoc), AnalyticsFileDoc[, 1], scale = c(4, 1),max.words=200,random.order = T, rot.per = .15, colors = col)
+
+## 「淡麗」ツイートのワードクラウド。キャンペーンに関するワードのほか、日本酒や中華そば・スープの名称や表現がまざっている。
+```
+
+# Describe Data
+
+## Grand Total {.tabset}
+
+### SA
+
+```{r , include=TRUE}
+gt.df<-list() #GT格納用リスト
+#SA
+gt.df$Q1_1<-df|>janitor::tabyl(Q1_1)|>tibble()
+gt.df$Q1_1|>adorn_totals()|>adorn_pct_formatting(affix_sign = F)|>kable(digits=3, align="lrrr")
+```
+
+### MA
+
+```{r , include=TRUE, warning=FALSE, message=FALSE}
+#MA
+temp<-c.format|>filter(id=="Q1")|>select(name=choice_id,choice=choice) #選択肢フォーマットからQ1の選択肢を取得
+temp$choice<-factor(temp$choice, levels = as.vector(temp$choice))
+gt.df$Q1<-df|>pivot_longer(Q1c1:Q1c16)|>left_join(temp)|>group_by(choice)|>summarize(n=sum(value),percent=mean(value)*100)
+gt.df$Q1|>adorn_totals(name="Multiple Total")|>kable(digits=1, caption="Q1(M.A.) n=1,000")
+
+```
+
+### 数量
+
+```{r , include=TRUE, warning=FALSE, message=FALSE}
+# 数量
+gt.df$FS2<-df|>select(FS2t1)|>describe()
+gt.df$FS2|>kable(digits=3)
+df|>ggplot()+geom_histogram(aes(x=FS2t1),fill="dodgerblue",color="white",binwidth=1) #ヒストグラム
+
+df$age10<-cut(df$FS2t1,breaks=seq(10,70,10),right=FALSE) #数量のカテゴライズ
+df$age10<-df$age10|>fct_recode("15～19歳"="[10,20)","20～29歳"="[20,30)","30～39歳"="[30,40)","40～49歳"="[40,50)","50～59歳"="[50,60)","60～69歳"="[60,70)")
+gt.df[["age10"]]<-df|>tabyl(age10)|>adorn_totals()|>adorn_pct_formatting(affix_sign = FALSE)
+gt.df$age10|>kable(digits=3, align="lrr")
+```
+
+### マトリクスSA
+
+```{r , include=TRUE, warning=FALSE, message=FALSE}
+#マトリクスSA
+temp<-i.format|>filter(str_detect(id,"^SC4"))|>select(name=id,item=ilabel) #アイテムフォーマットからSC4のアイテム名を取得
+temp$item<-factor(temp$item,levels=as.vector(temp$item))
+gt.df[["SC4"]]<-df|>pivot_longer(SC4s1:SC4s11)|>left_join(temp)|>tabyl(item,value)
+gt.df$SC4|>adorn_percentages("row")|>adorn_totals("col")|>adorn_pct_formatting(affix_sign=FALSE)|>kable(digits=3,align="lrrrrrrr")
+```
+
+## Cross Tabulation {.tabset}
+
+### Mean
+
+```{r , include=TRUE, warning=FALSE, message=FALSE}
+ttotal<-df|>summarise(n=n(),across(SC4s1_score:SC4s11_score, \(x) mean(x, na.rm=TRUE)))|>mutate(STUB="TOTAL", .before=1)
+t1<-df|>group_by(STUB=age10)|>summarise(n=n(),across(SC4s1_score:SC4s11_score, \(x) mean(x, na.rm=TRUE)))
+rbind(ttotal,t1)|>kable(digits=3)
+```
+
+### CrossTab(SA)
+```{r , include=TRUE, warning=FALSE, message=FALSE}
+sa_cross<-function(df,row,col){
+  t<-df|>count({{row}},{{col}})|>complete({{row}},{{col}},fill=list(n=0))|>pivot_wider(names_from={{col}},values_from = n)|>adorn_percentages()|>adorn_pct_formatting(affix_sign=FALSE)
+  t<-left_join(count(df,{{row}}),t)
+  t<-t|>rename(STUB={{row}})
+  ttable<-df|>count({{col}})|>complete({{col}}, fill=list(n=0))|>pivot_wider(names_from={{col}},values_from=n) |> mutate(n = count(df), .before = 1) |>adorn_percentages()|>adorn_pct_formatting(affix_sign=FALSE)
+  ttable<-ttable|>mutate(STUB="TOTAL", .before=1)
+  t<-rbind(ttable,t)
+  return(t)
+} 
+
+t1<-sa_cross(df,BLK,age10)
+kable(t1, align="lrrrrrrr")
+```
+
+### CrossTab(MA)
+
+```{r , include=TRUE, warning=FALSE, message=FALSE}
+ma_cross<-function(df,row,vars,title){
+ ttotal<-df|>summarise(n=n(),across({{vars}}, \(x) mean(x, na.rm=TRUE)*100))|>mutate(STUB="TOTAL", .before=1)
+ t<-df|>group_by(STUB={{row}})|>summarise(n=n(),across({{vars}},\(x) mean(x,na.rm=T)*100))
+ t<-rbind(ttotal,t)
+ t<-t|>rowwise()|>mutate(MT=sum(across({{vars}}), na.rm=T))
+ names(t)[3:(length(title)+2)]<-title
+return(t)
+}
+
+Q1.title<-c.format|>filter(id=="Q1")|>select(name=choice_id,choice=choice) #選択肢フォーマットからQ1の選択肢を取得
+title<-Q1.title$choice
+t<-ma_cross(df,age10,Q1c1:Q1c16,title)
+t|>kable(digits=1)
+```
+
+## Correlation {.tabset}
+
+### Correlation
+
+```{r , include=TRUE, warning=FALSE, message=FALSE}
+set.seed(12345)
+SC4<-SC4.score[sample(nrow(SC4.score),size=50,replace=F),]
+SC4<-SC4|>rowwise()|>mutate(price=mean(c_across(c(SC4s1_score,SC4s2_score)),na.rm=TRUE))
+SC4<-SC4|>rowwise()|>mutate(brand=mean(c_across(c(SC4s3_score,SC4s4_score,SC4s10_score,SC4s11_score)),na.rm=TRUE))
+SC4<-SC4|>rowwise()|>mutate(healthy=mean(c_across(SC4s5_score:SC4s9_score),na.rm=TRUE))
+sc4cor<-SC4|>select(price:healthy)|>corr.test(use="pairwise",adjust="none")
+sc4cor$r|>kable(digits=3, caption="相関係数")
+sc4cor$p|>kable(digits=3, caption="p値")
+
+library(GGally)
+g<-SC4|>select(price:healthy)|>ggpairs(title="選択因子間の相関",
+ upper=list(continuous=wrap("cor",size=7)),
+ diag=list(continuous = wrap("barDiag", fill="violet",col="white",breaks=seq(0.5,6.5,by=0.5))),
+ lower=list(continuous=wrap("smooth_loess",color="violet",size=1)))+
+ theme_grey()+theme(axis.text= element_text(size=6),legend.title = element_text(size=8),
+ legend.text =  element_text(size=8),axis.title = element_text(size=9),
+ plot.title= element_text(size=12),strip.text=element_text(size=10))
+g
+```
+
+### Corr Network
+
+```{r , include=TRUE, warning=FALSE, message=FALSE}
+title.short<-c("特売","安価","CM","いつも利用","国産","栄養価","低カロリー","免疫力","好み","環境配慮","容器包装")
+sc4.temp<-SC4.score|>select(SC4s1_score:SC4s11_score)
+colnames(sc4.temp)<-title.short
+cor.df<-cor(sc4.temp,use="pairwise")
+cc<-as.matrix(cor.df)
+cc[upper.tri(cc)] <- NA
+diag(cc) <- NA
+cc.df<-cc|>data.frame()
+cc.df$id<-rownames(cc.df)
+cc.df<-cc.df|>pivot_longer(cols=-id)
+cc.df <- cc.df[!is.na(cc.df[,3]), ]
+
+library(igraph)
+cc.df.sig <- cc.df[abs(cc.df[, 3]) >= 0.5, ]
+g <- graph_from_data_frame(cc.df.sig[, 1:2], directed = F)
+num.of.v <- length(V(g))
+V(g)$size  <- rep(20, num.of.v)
+V(g)$color <- rep("orange", num.of.v)
+V(g)$frame.color <- "white"
+V(g)$shape <- rep("circle", num.of.v)
+V(g)$label <- names(as.list(V(g)))
+V(g)$label.cex   <- rep(1, num.of.v)
+V(g)$label.color <- rep("black", num.of.v)
+l <- layout_with_fr(g)
+plot(g,layout=l, main="相関ネットワーク (r>0.5)")
+
+#tkplot(graph2,layout=layout.fruchterman.reingold,vertex.label.cex=0.8,vertex.size=3,edge.label = round(E(graph2)$weight,digits=2),edge.label.cex=0.7)
+```
+
+### Rank Correlation
+
+cor.spearman <- corr.test(dat,method="s") #順位相関係数
+
+> cor.kendall <- corr.test(dat,method="k") #順位相関係数（ケンドール）
+
+### Coef of Associantion
+
+#### 連関係数
+
+- χ^2^
+
+- クラメールのV
+
+```{r , include=TRUE, warning=FALSE, message=FALSE}
+library(vcd)
+t<-df|>xtabs(~af2+age10,data=_)
+kable(t)
+t.ac<-assocstats(t)
+summary(t.ac)
+kable(t.ac$chisq, digits=3)
+```
+
+#### 連関プロット
+
+ピアソン残差 (Pearson residuals) ・・・期待値との差 / 期待値の平方根 (χ^2^の平方根)
+
+```{r , include=TRUE, warning=FALSE, message=FALSE}
+df|>xtabs(~af2+age10,data=_)|>mosaic(shade=TRUE,varnames=FALSE,gp_labels=gpar(fontsize=7),legend=legend_resbased(fontsize=7),main="mosaic plot",rot_labels=c(0,0,0,0))
+df|>xtabs(~af2+age10,data=_)|>assoc(shade=TRUE,varnames=FALSE,gp_labels=gpar(fontsize=7),legend=legend_resbased(fontsize=7),main="association plot",rot_labels=c(0,0,0,0))
+
+cotabplot(~af2+age10|FS1,data=df,shade=TRUE,varnames=FALSE,gp_labels=gpar(fontsize=7),legend=FALSE,rot_labels=c(0,0,0,0))
+```
+
+cramer_mat <- function(df){
+# by miyashita 2017.1.18
+# vcdライブラリを利用したクラメール係数マトリクス作成
+n<-ncol(df)
+nn<-0
+for(i in 1:(n-1)){
+  nn<-nn+(n-i)
+}
+
+アウトプット用のマトリクス
+output<-matrix(1,nrow=n,ncol=n)
+for(i in 1: n){
+colnames(output) <- colnames(data)
+rownames(output) <- colnames(data)
+}
+for(i in 1: (n-1)){
+  for(j in (i+1):n){
+    #クロス表
+    cross<-xtabs(~df[,i]+df[,j],data=df)
+    #assocstats関数より、クロス表の分析統計量をresに格納する
+    res<-assocstats(cross)
+    cramer_v<-res$cramer
+      output[i,j]<-cramer_v
+      output[j,i]<-cramer_v
+  }
+}
+return(output)
+}
+
+cram.out <- cramer_mat(data)
+cram.out
+
+### Association Rule
+
+アソシエーション分析
+
+> library(arules)
+> data <- read.delim("clipboard")
+> data <- as(data,"matrix") #マトリクス形式に定義
+> head(data)
+     保育園.幼稚園.学校関連 絵本.書籍.図鑑 子ども向けCD.DVD.PCソフト 動画サイトの子ども向け映像 子ども向けのスマートフォン.タブレット用のアプリ 知育玩具.教具
+[1,]                      0              0                         1                          0                                               1             0
+[2,]                      1              1                         1                          1                                               0             1
+[3,]                      1              1                         0                          1                                               1             1
+[4,]                      1              1                         1                          1                                               1             1
+[5,]                      0              0                         0                          0                                               0             1
+[6,]                      1              1                         1                          1                                               0             0
+     総合型学習塾.教室 算数学習塾.教室 外国語教室.英語など. スポーツ教室.サッカー.スイミングなど. 芸術教室.音楽.絵画など. ベビーシッター.家庭教師
+[1,]                 0               1                    0                                     0                       0                       0
+[2,]                 1               1                    1                                     0                       1                       1
+[3,]                 0               0                    0                                     0                       0                       0
+[4,]                 1               1                    1                                     1                       1                       1
+[5,]                 0               0                    0                                     0                       0                       0
+[6,]                 0               0                    1                                     1                       1                       0
+     定期的に刊行される幼児向け雑誌 定期的に刊行される幼児向け教材のセット.絵本.玩具.DVDなど.
+[1,]                              0                                                         0
+[2,]                              1                                                         1
+[3,]                              0                                                         0
+[4,]                              1                                                         1
+[5,]                              0                                                         1
+[6,]                              0                                                         0
+
+> rules <- apriori(data,parameter=list(supp=0.2, conf=0.5))
+Apriori
+
+Parameter specification:
+ confidence minval smax arem  aval originalSupport support minlen maxlen target   ext
+        0.5    0.1    1 none FALSE            TRUE     0.2      1     10  rules FALSE
+
+Algorithmic control:
+ filter tree heap memopt load sort verbose
+    0.1 TRUE TRUE  FALSE TRUE    2    TRUE
+
+Absolute minimum support count: 120 
+
+set item appearances ...[0 item(s)] done [0.00s].
+set transactions ...[14 item(s), 600 transaction(s)] done [0.00s].
+sorting and recoding items ... [13 item(s)] done [0.00s].
+creating transaction tree ... done [0.00s].
+checking subsets of size 1 2 3 4 done [0.00s].
+writing ... [168 rule(s)] done [0.00s].
+creating S4 object  ... done [0.00s].
+> summary(rules)
+set of 168 rules
+
+rule length distribution (lhs + rhs):sizes
+ 1  2  3  4 
+ 4 49 87 28 
+
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+  1.000   2.000   3.000   2.827   3.000   4.000 
+
+summary of quality measures:
+    support         confidence          lift      
+ Min.   :0.2000   Min.   :0.5000   Min.   :1.000  
+ 1st Qu.:0.2129   1st Qu.:0.6317   1st Qu.:1.173  
+ Median :0.2317   Median :0.7303   Median :1.259  
+ Mean   :0.2638   Mean   :0.7225   Mean   :1.291  
+ 3rd Qu.:0.2792   3rd Qu.:0.8264   3rd Qu.:1.372  
+ Max.   :0.7333   Max.   :0.9231   Max.   :2.215  
+
+mining info:
+ data ntransactions support confidence
+ data           600     0.2        0.5
+
+> inspect(head(sort(rules,by="support"),n=20)) #支持度順20ルール
+> inspect(head(sort(rules,by="confidence"),n=20)) #信頼度順20ルール
+> inspect(head(sort(rules,by="lift"),n=20)) #リフト順20ルール
+
+# Analyse Data
+
+## Linear Model / Regression {.tabset}
+
+fit<-glm(y~x,family=poisson(link="log")) #poisson回帰
+summary(fit)
+x_new<-seq(-10,10,0.1) #散布図に表示
+x_new<-data.frame(x_new)
+colnames(x_new)<-"x"
+plot(x,y,family="MEI",pch=16,col="dodgerblue")
+lines(x_new$x, exp(cbind(1, x_new$x) %*% coef(fit)))
+
+nbfit<-glm.nb(y~x,link="log") #negative binomial回帰
+summary(nbfit)
+x_new<-seq(-10,10,0.1) #散布図に表示
+x_new<-data.frame(x_new)
+colnames(x_new)<-"x"
+plot(x,y,family="MEI",pch=16,col="dodgerblue")
+pred<-predict(nbfit,x_new$x,type="response")
+lines(x_new$x, pred ,col="red")
+
+### Mixed Model
+
+ibrary(PLmixed)
+
+library(nlme)
+
+### HLM
+
+### Multilevel Model
+
+## Statistical Test {.tabset}
+
+**群間の差の検定 = 線形モデルの分散分析**
+
+
+- 母集団の分布形によらず、nが大きければパラメトリックな検定
+
+- nが大きいとは、母集団の分布形による。母集団が正規分布ならごく小さくてもパラメトリックでいい
+
+- nが小さい場合も、母集団の分布形がわかるなら、ノンパラメトリック検定よりGLMなどを使うほうがいい
+
+### t-test
+
+```{r , include=TRUE}
+SC4.score<-data.frame(SC4.score)
+#グループ別平均
+SC4.mean<-SC4.score%>%group_by(seg=df$FS1)%>%summarize(n=n(),across(SC4s1_score:SC4s11_score,~mean(.x,na.rm=TRUE)))
+SC4.mean|>kable(digits=3)
+#t検定
+library(broom)
+sc4.test<-SC4.score|> summarize(across(SC4s1_score:SC4s11_score, ~ list(tidy(t.test(.~df$FS1)) %>%select(estimate:p.value, conf.low:alternative))))
+sc4.ttest<-sc4.test%>%apply(2,as.data.frame)%>%bind_rows()
+rownames(sc4.ttest)<-names(sc4.test)
+# sc4.ttest<-format(round(sc4.ttest,3),scientific=FALSE,nsmall=3)
+sc4.ttest|>kable(digits=3)
+```
+
+### Paired t-test
+
+**対応のある2群の差の検定は、線形混合モデルの分散分析でよりよく表現できる**
+
+```{r , include=TRUE, warning=FALSE, message=FALSE}
+library(rstatix)
+stat.test<-anorexia.df|>t_test(weight~time,paired=T, detailed=TRUE)|>add_significance()
+stat.test|>kable(digits=3)
+anorexia.df|>cohens_d(weight~time,paired=TRUE)|>kable(digits=3) #効果量
+
+library(ggpubr)
+ggpaired(data=anorexia.df,x="time",y="weight",id="pid",color="time",xlab=FALSE,ylab=FALSE,point.size=2,line.color="gray",line.sline.size = 0.6,title="拒食症患者の体重変化")+stat_compare_means(paired=T,method="t.test")+scale_color_manual(values=c("seagreen","salmon"))
+```
+
+### Non-Parametric Test
+
+Wilcoxonの順位和検定 = Mann-Whitney U test
+
+対応ありの場合(符号付き順位検定)もある
+
+```{r , include=TRUE, warning=FALSE, message=FALSE}
+#wilcoxonの順位和検定
+#wilcox.test(BOSSt1~perform,data=df.staff)
+#library(exactRankTests)
+#wilcox.exact(BOSSt1~perform,data=df.staff)
+```
+
+## Geometric Data Analysis {.tabset}
+
+
+```{r , include=TRUE}
+library(FactoMineR)
+library(factoextra)
+library(GDAtools)
+# library(showtext) #mac
+# showtext_auto(TRUE) #mac
+```
+
+### PCA
+
+```{r , include=TRUE, warning=FALSE, message=FALSE}
+title<-i.format$ilabel[20:30]
+colnames(SC4.score)<-title
+pca.out<-PCA(SC4.score, graph=FALSE)
+fviz_pca_var(pca.out,axes=c(1,2),repel=T,font.family="HiraKakuProN-W3",labelsize=3)
+fviz_pca_ind(pca.out, axes=c(1,2), geom="point", col.ind="grey")
+```
+
+### CA
+
+```{r , include=TRUE, warning=FALSE}
+ca.df<-df|>select(asc5s1,asc10,FS1,af2)
+dicho.df<-dichotom(ca.df) #カテゴリ変数をindicator変数に変換
+burt.tbl <- burt(ca.df) #バート表の作成
+ca.out<-CA(burt.tbl, graph=FALSE) #dfはクロス表、dummy変数のローデータ、indicator行列でもバート表でも
+fviz_ca_biplot(ca.out,labelsize=3,repel=TRUE, font.family="HiraKakuProN-W3") #labelsizeは5がデフォルト
+```
+
+### MCA
+
+```{r , include=TRUE, warning=FALSE}
+mca.out<-MCA(ca.df, graph=FALSE)
+fviz_mca_var(mca.out,axes=c(1,2),repel = TRUE, font.family="HiraKakuProN-W3",labelsize=3, col.var="black",shape.var=19)
+fviz_mca_ind(mca.out,axes=c(1,2), geom ="point", col.ind="gray", font.family="HiraKakuProN-W3")
+```
+
+**表現の質（cos^2^)**
+
+- ポイントが各軸でどれだけ表現されているか（相対的寄与）
+
+```{r , include=TRUE, warning=FALSE}
+mca.out$var$cos2|>kable(digit=3)
+mca.out|>fviz_mca_var(col.var="cos2",repel=TRUE, font.family="HiraKakuProN-W3") #表現の質(cos2)plot
+mca.ss<-mca.out$ind$coord[1:2] #サンプルスコア
+```
+
+### DCA
+
+DCA(Detrended Correspondence Analysis)
+
+一次元性（馬蹄形問題）への対応。
+
+library(vegan)
+dca.output <- decorana(data)
+summary(dca.output)
+plot(dca.output)
+
+## Clustering {.tabset}
+
+sc4.df<-test.df|>select(SC4s1:SC4s11)
+sc4.df<-sc4.df|>mutate_if(is.factor, as.numeric) #factorを数値に変換
+sc4.df<-7-sc4.df #スコアを逆転
+print(i.format,n=35)
+sc4.lab<-i.format$ilabel[20:30] #項目ラベル
+names(sc4.df)<-sc4.lab
+
+### 変数のクラスタリング(ward）
+sc4.cor<-cor(sc4.df)
+d<-as.dist(1-sc4.cor) #相関行列から距離行列を作成
+hc<-hclust(d,method="ward.D2")
+plot(hc,cex=0.5)
+rect.hclust(hc,k=5)
+cluster<-cutree(hc,k=5)
+
+### 回答者のクラスタリング 主成分分析〜ward, kmeans, 混合分布モデル
+pca.out<-PCA(sc4.df)
+pca.out$eig #固有値
+fviz_pca_var(pca.out,axes=c(1,2),labelsize=3,repel=T)
+sc4.score<-pca.out$ind$coord[,1:4] #第４成分まで使う
+
+### 階層型
+d<-dist(sc4.score)
+h<-hclust(d,method="ward.D2") #ward法
+plot(h) #デンドログラムを見てkを決定
+rect.hclust(h,k=6,border="dodgerblue")
+sc4.hclust<-cutree(h,k=6)
+
+### K-MEANS
+library(cluster)
+res<-clusGap(sc4.score,kmeans,K,max=10)
+plot(res) #gap統計量をみてkを決定
+set.seed(12345)
+sc4.k<-kmeans(sc4.score,7)
+sc4.k$size
+sc4.df<-cbind(sc4.df,cluster=sc4.k$cluster)
+sc4.df$cluster<-as.factor(sc4.df$cluster)
+clus.tab<-sc4.df|>group_by(cluster)|>summarise(across(where(is.numeric),mean))
+
+### クラスター再配置 kmeans without iteration
+dataにサンプルスコア、
+centerに初期中心の行列を入れておいて、直接距離計算する
+kmeansは1回は再配置（反復）しちゃうので使えない。
+
+
+distances <- outer( 
+  1:nrow(data), 
+  1:nrow(center), 
+  Vectorize( function(i,j) { 
+    sum( (data[i,] - center[j,])^2 )
+  } )
+)
+
+Find the nearest cluster
+clusters <- apply( distances, 1, which.min )
+clus <- as.factor(clusters)
+summary(clus) #size
+
+### 混合分布モデル
+library(mclust)
+seg.mc<-Mclust(sc4.score)
+seg.mc6<-Mclust(sc4.score,G=6)
+summary(seg.mc) #summaryで出てくるBICは正負が逆になっている
+sc4.mclust<-seg.mc$classification
+sc4.z<-seg.mc$z #所属確率
+
+## Decision Tree {.tabset}
+
+決定木 Decision Tree
+
+データ例
+>summary(data)
+F1                 F2                                                                     F3                         F4                                 F5                         resp
+30～34歳:67   会社員(フルタイム)                            :204               2週間に1回程度:54   2～3ヶ月に1回程度:123   「ウコンの力」:155   TOP2以外          : 94  
+35～39歳:90   公務員・団体職員                              : 21               ほぼ毎日      :26           月に1回以上      :135   「ヘパリーゼ」:145   魅力がある（TOP2）:206  
+40～44歳:80   商工サービス自営                              : 20               月に1回程度   :60   半年に1回程度    : 42   
+45～49歳:63   パート・アルバイト                            : 16               週1回程度     :87   
+                 自由業(フリーランス含む)                      : 10       週2～4日程度  :73   
+                 専門職(医師、弁護士、会計士、税理士、教員など):  8   
+                 (Other)                                       : 21   
+
+1 CART
+install.packages("rpart")
+library(rpart)
+result = rpart(resp~.,data=data) #~.は残り全部の変数という意味。指定するなら resp~F1+F2+F3+F4 などのように書く
+result
+
+目的変数によるmethodの変更
+method: the type of splitting rule to use. Options at this point are classification,
+anova, Poisson, and exponential.
+
+rpart(resp~.,data=data,method="poisson")
+
+作図用ライブラリ
+install.packages("rpart.plot")
+library(rpart.plot)
+rpart.plot(result)
+prp(result, type=2, extra=102,nn=TRUE, fallen.leaves=TRUE, faclen=0, varlen=0)
+install.packages("partykit")
+library(partykit)
+plot(as.party(result))
+plot(as.party(result),gp = gpar(fontsize = 8)) #フォントサイズ
+
+
+複雑度(cp)による枝の剪定
+plotcp(result)
+prune.result <- prune(result,cp=0.014)
+
+2 C5.0 ※日本語のラベルが使えない模様
+install.packages("C50")
+library(C50)
+c50.result <- c50(resp ~ ., data = data)
+c50.result
+plot(c50.result)
+
+
+3 CHAID
+install.packages("CHAID", repos="http://R-Forge.R-project.org")
+library(CHAID)
+chaid.result <- chaid(resp ~ ., data = data)
+chaid.result
+plot(chaid.result)
+
+## Choice Model [.tabset]
+
+- 効用関数
+Uij = αj+βXj+γjZi+δjWij+εij
+i : 人  ,  j : 選択肢
+α : 選択肢固有効果（切片）
+β：選択肢ごとに異なる変数の効果
+γ :  個人ごとに異なる変数の選択肢ごとの効果
+δ : 個人・選択肢ごとに異なる変数の選択肢ごとの効果
+
+選択型コンジョイント CBC+HB
+コンジョイント分析は、CBC+HB（選択型コンジョイント＋階層ベイズ）がデフォルトになると思うので、以下メモ。
+もちろん、SAWTOOTH社のCBC+HBと同じもの、ではない。
+（SAWTOOTHを使った場合と、Rのbayesmパッケージによる分析の比較研究などもある）
+
+選択実験＝選択型コンジョイントデータの分析で、個人ごとの異質性も分析に含めたい場合、階層ベイズモデルという統計手法を使うことがある。
+以下はそのためのコード。
+選択実験のための設計（プロファイル作成）は、Algdesignなどのパッケージを利用する必要がある。
+
+
+library("mlogit")
+多項ロジット（ここでは、サンプルデータElectricityを読み込むためにライブラリを呼び出している）
+data("Electricity", package = "mlogit")
+
+せっかくなので、多項ロジットモデルで個人パラメータ推定なしの効用値を算出してみる
+Electr <- mlogit.data(Electricity, id="id", choice="choice",
+  varying=3:26, shape="wide", sep="")
+Elec.mxl <- mlogit(choice~pf+cl+loc+wk+tod+seas|0, Electr,
+  rpar=c(pf='n', cl='n', loc='n', wk='n', tod='n', seas='n'),
+  R=100, halton=NA, print.level=0, panel=TRUE)
+summary(Elec.mxl)
+ 
+library(bayesm)
+階層ベイズ
+id=levels(as.factor(Electricity$id))
+nresp<-length(unique(id))
+lgtdata=NULL
+
+サンプルデータElectricityを、bayesmで扱えるようなlist形式(lgtdata)に変換している 
+for (i in 1:nresp)
+{
+  respdata=Electricity[Electricity$id==id[i],]
+  ty<-NULL
+  tdesign<-NULL
+  ty=respdata$choice
+  nobs=length(ty)
+  for (j in 1:nobs) {
+    design1<-as.matrix(respdata[j,c(3,7,11,15,19,23)])
+    design2<-as.matrix(respdata[j,c(4,8,12,16,20,24)])
+    design3<-as.matrix(respdata[j,c(5,9,13,17,21,25)])
+    design4<-as.matrix(respdata[j,c(6,10,14,18,22,26)])
+    tdesign<-rbind(tdesign,design1,design2,design3,design4)
+  }
+  lgtdata[[i]]=list(y=ty,X=as.matrix(tdesign))
+}
+
+ここから、MCMC法（マルコフ連鎖モンテカルロ）によるシミュレーション 
+R回事後分布をドローして、keep回ごとにキープ（自己相関を薄めるため、keep-1回分は捨てる）
+ncomp=1・・正規分布を仮定。2以上にすると混合正規分布
+mcmc=list(R=2000,keep=10)
+out=rhierMnlRwMixture(Data=list(p=4,lgtdata=lgtdata),
+                      Prior=list(ncomp=1),Mcmc=mcmc)
+ 
+plot(out$loglike,type="l")
+trace<-t(apply(out$betadraw,c(2,3),mean))
+matplot(trace, type="l")
+ 
+beta.51_200<-apply(out$betadraw[,,51:200],2,mean)
+beta.101_200<-apply(out$betadraw[,,101:200],2,mean)
+beta.151_200<-apply(out$betadraw[,,151:200],2,mean)
+cbind(beta.51_200,beta.101_200,beta.151_200)
+ 
+定常分布になった以降の事後分布から適当な期待値を選ぶ？
+estimate<-apply(out$betadraw[,,101:200],c(1,2),mean)
+estimate2<-cbind(matrix(id),estimate)
+作業ディレクトリにcsvファイルで個人効用パラメータをエクスポート。
+write.csv(estimate2, file="estimate.csv")
+
+
+サンプルデータ:Electricity
+
+361人の回答者(id=1~361)が
+4つの電力サービス選択シナリオから最善の1つを選択する実験を
+めいめい12回行ったデータ。（4332回の選択
+
+choice
+選択
+the choice of the individual, one of 1, 2, 3, 4,
+
+id
+ID
+the individual index,
+
+pfi
+価格 (0,7,9)
+fixed price at a stated cents per kWh, with the price varying over suppliers and experiments, for scenario i=(1, 2, 3, 4),
+
+cli
+契約期間 (0,1,5)
+the length of contract that the supplier offered, in years (such as 1 year or 5 years.) During this contract period, the supplier guaranteed the prices and the buyer would have to pay a penalty if he/she switched to another supplier. The supplier could offer no contract in which case either side could stop the agreement at any time. This is recorded as a contract length of 0
+
+loci
+地元企業か(1-0)
+is the supplier a local company,
+
+wki
+有名企業か(1-0)
+is the supplier a well-known company
+
+todi
+時間帯割引の有無(1-0)
+a time-of-day rate under which the price is 11 cents per kWh from 8am to 8pm and 5 cents per kWh from 8pm to 8am. These TOD prices did not vary over suppliers or experiments: whenever the supplier was said to offer TOD, the prices were stated as above.
+
+seasi
+時間帯割引の有無(1-0)
+a seasonal rate under which the price is 10 cents per kWh in the summer, 8 cents per kWh in the winter, and 6 cents per kWh in the spring and fall. Like TOD rates, these prices did not vary. Note that the price is for the electricity only, not transmission and distribution, which is supplied by the local regulated utility.
+
+
+> head(Electricity)
+  choice id pf1 pf2 pf3 pf4 cl1 cl2 cl3 cl4 loc1 loc2 loc3 loc4 wk1 wk2 wk3 wk4 tod1 tod2 tod3 tod4 seas1 seas2 seas3 seas4
+1      4  1   7   9   0   0   5   1   0   5    0    1    0    0   1   0   0   1    0    0    0    1     0     0     1     0
+2      3  1   7   9   0   0   0   5   1   5    0    0    1    0   1   1   0   0    0    0    1    0     0     0     0     1
+3      4  1   9   7   0   0   5   1   0   0    0    0    0    1   0   1   1   0    0    0    1    0     0     0     0     1
+4      4  1   0   9   7   0   1   1   0   5    0    0    1    0   1   0   0   1    0    0    0    1     1     0     0     0
+5      1  1   0   9   0   7   0   1   0   5    1    0    0    0   0   1   0   1    1    0    0    0     0     0     1     0
+6      4  1   0   9   0   7   0   0   1   5    0    0    1    0   0   0   0   1    0    0    1    0     1     0     0     0
+
+
+> lgtdata[[1]]
+$y
+ [1] 4 3 4 4 1 4 1 3 1 2 3 4
+
+$X
+   pf1 cl1 loc1 wk1 tod1 seas1
+1    7   5    0   1    0     0
+1    9   1    1   0    0     0
+1    0   0    0   0    0     1
+1    0   5    0   1    1     0
+2    7   0    0   1    0     0
+2    9   5    0   1    0     0
+2    0   1    1   0    1     0
+2    0   5    0   0    0     1
+3    9   5    0   0    0     0
+3    7   1    0   1    0     0
+
+rhierMnlRwMixture(Data, Prior, Mcmc)
+rhierMnlRwMixture is a MCMC algorithm for a hierarchical multinomial logit with a mixture of normals heterogeneity distribution. 
+
+Data=list(p,lgtdata,Z) ( Z is optional)
+pは選択肢数、lgtdataは選択データ、Zはデモグラフィック情報など他の事前情報（オプション）
+※Zの各変数は、平均０に中心化している必要がある　# Z=t(t(Z)-apply(Z,2,mean)) # demean Z
+
+
+### Orthogonal Array
+
+直交表　Orthogonal Array
+install.packages("DoE.base")
+library(DoE.base)
+oa.design(nlevels=c(3,3,3,3))  # 3水準4因子
+直交表　Orthogonal Array
+install.packages("DoE.base")
+library(DoE.base)
+oa.design(nlevels=c(3,3,3,3))  # 3水準4因子
+
+### Best-Worst Scaling
+
+Maxdiff ~ Best-Worst Scaling
+
+最も重視する項目と最も重視しない項目を何回か選ばせて、各項目の重視度の尺度を作成する。
+
+1) 質問数
+
+12要素、1問で4つのうち1つ選ばせる、とすると
+
+3 × 12（要素数） / 4（選択肢数） = 9　で　9問以上必要
+
+- 各要素が同数現れる
+
+- 各要素が3回以上現れる
+
+2)D効率
+
+incomplete.block.design <- function(number.alternatives, number.blocks, alternatives.per.block, n.repeats = 1000){
+    # Check that the parameters are appropriate
+    # Sawtooth recommends that number.blocks >= 3 * number.alternatives / alternatives.per.block
+    if (number.blocks < 3 * number.alternatives / alternatives.per.block)
+        warning("It is recomended that number.blocks >= 3 * number.alternatives / alternatives.per.block");
+    library(AlgDesign)
+    best.result = NULL
+    best.D = -Inf
+    for (i in 1:n.repeats){
+        alg.results <- optBlock(~.,withinData=factor(1:number.alternatives),blocksizes=rep(alternatives.per.block,number.blocks), nRepeats=5000) #BIB
+        if (alg.results$D > best.D){
+            best.result = alg.results
+            best.D = alg.results$D
+        }
+    }
+    design <- matrix(NA,number.blocks,alternatives.per.block, dimnames= list(block = 1:number.blocks, Alternative = 1:alternatives.per.block))
+    binary.design <- matrix(0,number.blocks,number.alternatives, dimnames= list(block = 1:number.blocks, alternative = 1:number.alternatives))
+    counter <- 0
+    for (block in best.result$Blocks){
+        counter <- counter + 1
+        blck <- unlist(block)
+        design[counter,] <- blck
+        for (a in blck)
+            binary.design[counter,a] <- 1
+    }
+    n.appearances.per.alternative <- table(as.numeric(design))
+    combinations.of.alternatives <- crossprod(table(c(rep(1:number.blocks, rep(alternatives.per.block,number.blocks))), best.result$design[,1]))
+    list(binary.design = t(binary.design), design = t(design), frequencies = n.appearances.per.alternative, pairwise.frequencies=combinations.of.alternatives, binary.correlations = round(cor(binary.design),2))
+}
+
+
+### mlogitのformula
+choice ~ spec | gender | time_performance
+choice ~ 0 + spec | demographic | time_performance #切片=0 選択肢固有の効果はXijで説明されているとする
+choice : 商品選択
+spec : 商品のスペック（選択肢ごとに違う）
+demographic : 個人属性
+time_performance : 購入にかかる時間（個人ごと、選択肢ごとに違う） 
+
+### mlogit
+data<-dfidx(df,idx=c("respondent","alternative")) # index付データにする
+ml.out<-mlogit(choice ~ 0 + spec | demographic | time_performance, data, reflevel=1, nests=nests = list(public = c('train', 'bus'), other = c('car','air')))
+
+## FA / SEM {.tabset}
+
+
+## Sample Weight / Complex Survey Samples {.tabset}
+
+ウエート付けによる誤差
+
+調査におけるウエーティングは、誤差について改善と悪化の両側面がある。
+ウエート付けは基本的に誤差を拡大させるが、
+層化効果がある場合改善にもなる。
+層化：https://ja.wikipedia.org/wiki/%E5%B1%A4%E5%8C%96%E6%8A%BD%E5%87%BA%E6%B3%95
+
+
+層化による効果を抜きにした、概算のウエート付の影響(Design Effect) は
+
+
+ウエート後のnを回収数に揃えたときは、ウエート値の平均＝1なので
+
+
+※S.D.(wt) = ウエート値の標準偏差　mean(wt) = ウエート値の平均
+
+
+例　400のうち100サンプルに2、300サンプルに0.67のウエートをつけた場合
+
+ 層	n 	wt 	wtd n 	mean(wt) 	 S.D.(wt)
+A	 100	 2	 200	 2	 
+B	 300	0.67 	200 	 0.67	 
+ 合計	400 	 	400 	1 	0.57735 
+
+400サンプル50％の標本誤差(信頼度95%)は±4.9ポイント
+
+
+
+なので　標本誤差は4.9×1.155＝±5.7
+
+
+レポート記載例
+
+以下の標本誤差は、無作為抽出の標本誤差式にウエート付けの影響を加味して算出した。
+（ウエート付けの影響の計算式） 
+
+本調査では、全回答者(n=xxxx)における50％の項目について、標本誤差は±4.5％ポイント（信頼度95％）となる。
+これは、サンプルと母集団との間の差異がウエート付け変数によって偏りなく修正されるという仮定に基づく。
+ [この仮説の検証は行われていない。 ]
+
+
+層化の効果も含めた
+一般に、母集団のマージン比率に基づくウエートバック集計は、層化の効果を期待して行われると思われるので、
+上記だと誤差を過大に見積もっているかもしれない。
+Rのsurveyパッケージで、複雑なサンプリング設計の場合の有意差検定ができる。
+
+R {survey}
+平均値の差の検定(t-test)
+> dsgn <- svydesign(id=~1,strata=~strata,weights=~wt,data=data)
+> svyttest(x~class,dsgn)
+
+上記の関数と完全には一致しない（関数では標準誤差の推定にサンドイッチ推定量を使っている）が、
+数式は
+
+EaとEbの差の検定
+\begin{align*} t=\frac{|Ea-Eb|}{\sqrt{\sum_{i=1}^{Ns} (\frac{Wni}{WNt})^2 \times (\frac{Via}{Nia}+\frac{Vib}{Nib})}} \end{align*}
+
+d.f.=Nt-Ns-1
+
+Ea:グループaのウエート付き平均
+Eb:グループbのウエート付き平均
+WNi:層iのウエート後ｎ
+WNt:全体のウエート後n
+Nia,Nib:層iのa/b群の実n数
+Via,Vib:層iのa/b群の不偏分散
+Nt:全体の実n数
+Ns:層の数(i=1,2,3,...Ns)
+
+比率の差の検定(z-test)
+> svychisq(~x+class,dsgn,statistic="Chisq")
+
+上記の関数と完全には一致しない（関数ではRao-Scottの修正がはいっているため？）が、
+数式は
+
+比率PaとPbの差の検定
+\begin{align*} z=\frac{|Pa-Pb|}{\sqrt{\sum_{i=1}^{Ns} (\frac{Wni}{WNt})^2 \times (\frac{Pia(1-Pia)}{Nia}+\frac{Pib(1-Pib)}{Nib})}}\end{align*}
+
+
+Pa:グループaのウエート付き比率
+Pb:グループbのウエート付き比率
+WNi:層iのウエート後ｎ
+WNt:全体のウエート後n
+Nia,Nib:層iのa/b群の実n数
+Pia,Pib:層iのa/b群の比率
+Nt:全体の実n数
+Ns:層の数(i=1,2,3,...Ns)
+
+単純無作為抽出以外
+ランダムサンプリングの仮定を外した場合は、
+リサンプリング法（bootstrapping)、ベイジアン信頼区間、テイラー展開による誤差推定など。
+
+### Propensity Score
+
+傾向スコア Propensity Score
+
+傾向スコア（propensity score) を利用して、サンプルのウエイティングや抽出を行う。
+
+1) Propensity Score Weighting 
+（例）2つのローデータがあり、一方が基本属性などの構成比が歪んでいるので、もう一方になるべく合わせるウエート値を算出する、というようなケース。
+Rのサンプルデータ、lalondeを利用して例示する。
+
+> data(lalonde)
+> test.data <- lalonde # test.dataにlalondeデータをコピー
+> head(test.data) 
+
+
+treat変数=1が治療/被曝群、=0が対照群（コントロール）。
+対照群は歪みなく抽出されているとして、=1のサンプルの歪みを補正するウエートを計算する。（treat以外の全変数を使って）
+
+> by(test.data,test.data$treat,summary) # 確認のため、サンプルとコントロールの差を集計
+
+
+
+> ps.mod<-glm(treat~age+educ+black+hispan+married+nodegree+re74+re75,data=lalonde,family = binomial(link='logit')) # treat を目的変数とするロジスティック回帰
+> summary(ps.mod) # 結果概要
+
+
+> test.data$pscore <- fitted(ps.mod) # データの末尾に傾向スコア(fitted(ps.mod))を追加
+> head(test.data)
+
+> test.data$pweight <- ifelse(test.data$treat==1,(1-test.data$pscore)/test.data$pscore,1) # 傾向スコアの逆数を使って、treat=1のサンプル用のウエイトを計算し、末尾に追加。treat=0のウエートは1を入れている。
+> head(test.data)
+
+by(test.data, test.data$treat, function(x) weighted.mean(x$black, x$pweight)) # ウエート付けによって、乖離が減少してるか確認
+by(test.data, test.data$treat, function(x) weighted.mean(x$married, x$pweight))
+
+
+2) Propensity Score Matching
+（例）母集団構成が歪んでいるリストから、歪んでいないリストの個々のサンプルになるべく属性の近い人を抽出する。無作為標本の（少数）データ（例えば、ランダムサンプリングの調査データ）に合うよう、非無作為標本（例えば、オンライン調査のパネル）からデータを抽出する。
+
+数の多いtreat=0からtreat=1のサンプルに合うようマッチングさせる。　※同じlalondeデータを使うが、上の例のweightingと考え方を逆にしているので混乱しないよう。
+
+> library(MatchIt) # マッチングのライブラリー（ダウンロードしてない場合、install.packages("MatchIt")
+> m.out <- matchit(treat ~ re74 + re75 + educ + black + hispan + age, data = test.data, method = "nearest") #最近隣法でマッチング
+> summary(m.out) # マッチング結果概要
+> match.data(m.out, group="all", distance = "distance", weights = "weights", subclass = "subclass") # マッチングさせたデータの抽出
+
+
+### Calibration
+
+Raking / Calibration
+
+レイキングウエイトの算出
+
+pop.~という変数に母集団のマージンの度数を入れている。
+
+install.packages("survey")
+library(survey)
+dat <- read.delim("clipboard")
+for (i in 2:9) {
+dat[,i] <- as.factor(dat[,i])
+}
+summary(dat)
+rclus1<- svydesign(id=~1, data=dat)
+pop.AGE <- data.frame(AGECLASS=c("1","2","3"), Freq=c(18,31,31))
+pop.c1 <- data.frame(BRANDUc1=c("1","0"), Freq=c(5,75))
+pop.c2 <- data.frame(BRANDUc2=c("1","0"), Freq=c(34,46))
+pop.c3 <- data.frame(BRANDUc3=c("1","0"), Freq=c(7,63))
+pop.DUAL <- data.frame(DUAL=c("1","2"), Freq=c(42,38))
+pop.NofBUY <- data.frame(NofBUY=c("1","2"), Freq=c(44,36))
+rclus1r <- rake(rclus1, list(~AGECLASS,~BRANDUc1,~BRANDUc2,~BRANDUc3,~DUAL,~NofBUY), list(pop.AGE,pop.c1,pop.c2,pop.c3,pop.DUAL,pop.NofBUY))
+write.csv(weights(rclus1r),file="weight.csv")
+
+### Missing Values
+
+欠測値推定 Missing Values
+
+library(mice)
+data <- read.delim("clipboard",row.names=1)
+imp <- mice(data)  #デフォルトはPMM法※、dataにあるすべての変数を使っている
+imp.data <- complete(imp)　 #1つ目の補完値をデータに入れている（miceではデフォルトで５つ作っている）
+write.csv(imp.data,file="impdata.csv")
+
+多重代入法（multiple imputation)をやる場合は、引き続いて
+fit<-with(imp,(glm(obj ~ exp1 + exp2, family=binomial(link="logit")))) #ロジスティック回帰の場合
+pooled <- pool(fit) 
+
+で、この場合5つの補完値をpool（統合）した推定値が得られる
+
+※
+Predictive Mean Matching (PMM) is a semi-parametric imputation approach. It is similar to the regression method except that for each missing value, it fills in a value randomly from among the a observed donor values from an observation whose regression-predicted values are closest to the regression-predicted value for the missing value from the simulated regression model (Heitjan and Little 1991; Schenker and Taylor 1996).
+
+The PMM method ensures that imputed values are plausible; it might be more appropriate than the regression method (which assumes a joint multivariate normal distribution) if the normality assumption is violated (Horton and Lipsitz 2001, p. 246).
+
+
+## Graph Theory {.tabset}
+
+> plot(g,layout=layout.fruchterman.reingold,vertex.size=size$size/100)
+> tkplot(g,layout=layout.fruchterman.reingold,vertex.size=size$size/100,vertex.color="White") #インタラクティブグラフ
+
+パスダイアグラム作成
+DOT言語でスクリプティング
+
+library(DiagrammeR)
+
+grViz(" digraph dot {
+ graph [rankdir = LR,fontsize = 30, fontname = Meiryo,
+ color = black, label='Correlations']
+ node[ fontname = Meiryo,fontsize = 30]
+思案顔[ style=filled; fillcolor='gray' ]
+注目顔[ style=filled; fillcolor='gray' ]
+笑顔[ style=filled; fillcolor='gray' ]
+ edge[fontsize = 30]
+思案顔 -> 活発な -> 広告好意度 [ color =red, penwidth = 3.5,label=-0.35]  [ color =red, penwidth = 3.5,label=-0.35] 
+思案顔 -> 共感できる[ color =red, penwidth = 3.5,label=-0.35] [ color =red, penwidth = 3.5,label=-0.35] 
+思案顔 -> テンポがよい[ color =red, penwidth = 3.4,label=-0.34] 
+思案顔 -> 親しみやすい[ color =red, penwidth = 3.4,label=-0.34] 
+思案顔 -> おもしろい[ color =red, penwidth = 2.9,label=-0.29] 
+笑顔 -> 競合との差別性[ color =red, penwidth = 2.6,label=-0.26] 
+笑顔 -> さわやかな[ color =red, penwidth = 2.5,label=-0.25] 
+思案顔 -> おいしそうな感じ[ color =red, penwidth = 2.5,label=-0.25] 
+思案顔 -> 出ている人物[ color =red, penwidth = 2.3,label=-0.23] 
+笑顔 -> かわいい[ color =red, penwidth = 2,label=-0.2] 
+笑顔 -> 癒される[ color =red, penwidth = 2,label=-0.2] 
+注目顔 -> 斬新な[ color =red, penwidth = 1.9,label=-0.19] 
+笑顔 -> 広告好意度[ color =black, penwidth = 1.9,label=0.19] 
+笑顔 -> インパクトがある[ color =black, penwidth = 1.9,label=0.19] 
+注目顔 -> 癒される[ color =black, penwidth = 1.9,label=0.19] 
+注目顔 -> 親しみやすい[ color =black, penwidth = 2.1,label=0.21] 
+{rank=same;思案顔;注目顔;笑顔}
+{rank=max;広告好意度;親しみやすい}
+}")
+
+## QCA
+
+Qualitative Comparative Analysis
+library(QCA)
+
+## Pricing Analysis {.tabset}
+
+### PSM
+
+価格感度分析 PSM
+
+library(devtools)
+devtools::install_github("kintero/psmr")
+ ローデータをコピーして
+dat <- read.delim("clipboard",row.names=1)
+psmObject<-psm(dat, "toocheap", "cheap", "expensive", "tooexpensive")
+plot(psmObject)
+
+setwd("C:/Users/miyashita/Documents/folder") #アウトプットするフォルダ指定
+psm.df = as.data.frame(do.call(rbind, psmObject$results$Generic))
+write.csv(psm.df,file="psm_result.csv")
+
+
+
+
+
